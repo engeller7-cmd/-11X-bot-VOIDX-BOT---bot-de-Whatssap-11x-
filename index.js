@@ -1,65 +1,60 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys')
-const express = require('express')
-const P = require('pino')
-const qrcode = require('qrcode-terminal')
-const fs = require('fs')
-const path = require('path')
-const settings = require('./settings')
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, Browsers } = require("@whiskeysockets/baileys")
+const fs = require("fs")
+const path = require("path")
+const pino = require("pino")
+const settings = require("./settings")
 
-const app = express()
-app.get('/', (req, res) => res.send(`${settings.botName} Online ✅`))
-app.listen(3000, () => console.log('Keep alive ON'))
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState("auth")
+  const { version } = await fetchLatestBaileysVersion()
 
-async function start() {
-  const { state, saveCreds } = await useMultiFileAuthState('./auth')
   const sock = makeWASocket({
+    version,
     auth: state,
-    logger: P({ level: 'silent' }),
-    browser: [settings.botName, "Chrome", "1.0"],
-    printQRInTerminal: true
+    logger: pino({ level: "silent" }),
+    browser: Browsers.macOS("Desktop"),
+    printQRInTerminal: false
   })
 
-  sock.ev.on('creds.update', saveCreds)
+  // ESTO ES LO QUE HACE QUE DURE
+  if (!sock.authState.creds.registered) {
+    console.log("Solicitando código de emparejamiento...")
+    setTimeout(async () => {
+      let phoneNumber = "51900000000" // << CAMBIA ESTO POR TU NUMERO
+      phoneNumber = phoneNumber.replace(/[^0-9]/g, "")
+      const code = await sock.requestPairingCode(phoneNumber)
+      console.log(`\n=================================\nTU CÓDIGO ES: ${code}\nVálido por 2 minutos\nPonlo en WhatsApp > Dispositivos vinculados > Vincular con número\n=================================\n`)
+    }, 3000)
+  }
 
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update
-    if (qr) qrcode.generate(qr, { small: true })
-    if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
-      console.log('Desconectado, reconectando...')
-      if (shouldReconnect) start()
-    } else if (connection === 'open') {
-      console.log(`CONECTADO - ${settings.botName}`)
-    }
+  sock.ev.on("creds.update", saveCreds)
+
+  sock.ev.on("connection.update", (u) => {
+    if (u.connection === "open") console.log("✅ BOT CONECTADO!")
+    if (u.connection === "close") startBot()
   })
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
+  sock.ev.on("messages.upsert", async ({ messages }) => {
     const m = messages[0]
     if (!m.message || m.key.fromMe) return
-    
-    const msgText = m.message.conversation || m.message.extendedTextMessage?.text || m.message.imageMessage?.caption || ""
-    const prefix = settings.prefix.find(p => msgText.startsWith(p))
-    if (!prefix) return
-
-    const args = msgText.slice(prefix.length).trim().split(/ +/)
+    const body = m.message.conversation || m.message.extendedTextMessage?.text || ""
+    if (!body.startsWith("!")) return
+    const args = body.slice(1).trim().split(/ +/)
     const command = args.shift().toLowerCase()
     
-    // Cargar plugins
-    const pluginsPath = path.join(__dirname, 'plugins')
-    if (fs.existsSync(pluginsPath)) {
-      const files = fs.readdirSync(pluginsPath)
-      for (const file of files) {
-        if (file.endsWith('.js')) {
-          const plugin = require(path.join(pluginsPath, file))
-          if (plugin.command && plugin.command.includes(command)) {
-            try { await plugin.run(sock, m, args, { settings }) } catch(e) { console.log(e) }
-          }
+    const pluginsPath = path.join(__dirname, "plugins")
+    if (!fs.existsSync(pluginsPath)) return
+    for (const file of fs.readdirSync(pluginsPath)) {
+      if (!file.endsWith(".js")) continue
+      try {
+        delete require.cache[require.resolve(path.join(pluginsPath, file))]
+        const plugin = require(path.join(pluginsPath, file))
+        if (plugin.command.includes(command)) {
+          await plugin.run(sock, m, args, { settings, command })
         }
-      }
+      } catch (e) { console.log(e) }
     }
   })
 }
 
-start()
-process.on('uncaughtException', console.log)
-process.on('unhandledRejection', console.log)
+startBot()
