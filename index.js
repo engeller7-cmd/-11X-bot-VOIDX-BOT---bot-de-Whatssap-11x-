@@ -20,7 +20,7 @@ async function startBot() {
   if (!sock.authState.creds.registered) {
     console.log("Solicitando código de emparejamiento...")
     setTimeout(async () => {
-      let phoneNumber = "51900000000" // << CAMBIA ESTO POR TU NUMERO
+      let phoneNumber = "51938287313" // << CAMBIA ESTO POR TU NUMERO
       phoneNumber = phoneNumber.replace(/[^0-9]/g, "")
       const code = await sock.requestPairingCode(phoneNumber)
       console.log(`\n=================================\nTU CÓDIGO ES: ${code}\nVálido por 2 minutos\nPonlo en WhatsApp > Dispositivos vinculados > Vincular con número\n=================================\n`)
